@@ -185,12 +185,12 @@ class FPSTracker:
         fps = 1 / self.dt
         if self.n_envs > 0:
             self.total_fps = fps * self.n_envs
-            gs.logger.info(
-                f"Running at ~<{self.total_fps:,.2f}>~ FPS (~<{fps:.2f}>~ FPS per env, ~<{self.n_envs}>~ envs)."
-            )
+            # gs.logger.info(
+            #     f"Running at ~<{self.total_fps:,.2f}>~ FPS (~<{fps:.2f}>~ FPS per env, ~<{self.n_envs}>~ envs)."
+            # )
         else:
             self.total_fps = fps
-            gs.logger.info(f"Running at ~<{fps:.2f}>~ FPS.")
+            # gs.logger.info(f"Running at ~<{fps:.2f}>~ FPS.")
         if self.compensate_logging_cost:  # skip logging cost
             self.last_time = time.perf_counter()
         else:

@@ -38,9 +38,9 @@ from torch.nn.modules import rnn
 class AC_Args():
     # policy
     init_noise_std = 1.0
-    actor_hidden_dims = [512, 256, 128]
-    critic_hidden_dims = [512, 256, 128]
-    adaptation_module_branch_hidden_dims = [256,128, 64]    #[64, 32]
+    actor_hidden_dims = [128, 64, 32]
+    critic_hidden_dims = [128, 64, 32]
+    adaptation_module_branch_hidden_dims = [128, 64, 32]    #[64, 32]
     history_encoder_dims = [256, 128]
     activation = 'elu'  # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
     num_commands = 18
@@ -67,11 +67,11 @@ class ActorCritic(nn.Module):
         activation = get_activation(activation)
 
         mlp_input_dim_a = num_actor_obs
-        mlp_input_dim_c = num_critic_obs
+        mlp_input_dim_c = num_actor_obs
 
         # Policy
         actor_layers = []
-        actor_layers.append(nn.Linear(mlp_input_dim_a, actor_hidden_dims[0]))
+        actor_layers.append(nn.Linear(mlp_input_dim_a+1, actor_hidden_dims[0]))
         actor_layers.append(activation)
         for l in range(len(actor_hidden_dims)):
             if l == len(actor_hidden_dims) - 1:
@@ -83,7 +83,7 @@ class ActorCritic(nn.Module):
 
         # Value function
         critic_layers = []
-        critic_layers.append(nn.Linear(mlp_input_dim_c, critic_hidden_dims[0]))
+        critic_layers.append(nn.Linear(mlp_input_dim_c+1, critic_hidden_dims[0]))
         critic_layers.append(activation)
         for l in range(len(critic_hidden_dims)):
             if l == len(critic_hidden_dims) - 1:
@@ -92,6 +92,18 @@ class ActorCritic(nn.Module):
                 critic_layers.append(nn.Linear(critic_hidden_dims[l], critic_hidden_dims[l + 1]))
                 critic_layers.append(activation)
         self.critic = nn.Sequential(*critic_layers)
+
+        # state estimator
+        state_estimator_layers = []
+        state_estimator_layers.append(nn.Linear(mlp_input_dim_c, AC_Args.adaptation_module_branch_hidden_dims[0]))
+        state_estimator_layers.append(activation)
+        for l in range(len(AC_Args.adaptation_module_branch_hidden_dims)):
+            if l == len(AC_Args.adaptation_module_branch_hidden_dims) - 1:
+                state_estimator_layers.append(nn.Linear(AC_Args.adaptation_module_branch_hidden_dims[l], 1))
+            else:
+                state_estimator_layers.append(nn.Linear(AC_Args.adaptation_module_branch_hidden_dims[l], AC_Args.adaptation_module_branch_hidden_dims[l + 1]))
+                state_estimator_layers.append(activation)
+        self.state_estimator = nn.Sequential(*state_estimator_layers)
 
         print(f"Actor MLP: {self.actor}")
         print(f"Critic MLP: {self.critic}")
@@ -132,7 +144,9 @@ class ActorCritic(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
-        mean = self.actor(observations)
+        vel = self.state_estimator(observations)
+        mean = torch.cat((observations,vel),dim=-1)
+        mean = self.actor(mean)
         self.distribution = Normal(mean, mean*0. + self.std)
 
     def act(self, observations, **kwargs):
@@ -143,11 +157,14 @@ class ActorCritic(nn.Module):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
-        actions_mean = self.actor(observations)
-        return actions_mean
+        vel = self.state_estimator(observations)
+        # print(vel)
+        mean = torch.cat((observations,vel),dim=-1)
+        mean = self.actor(mean)
+        return mean
 
-    def evaluate(self, critic_observations, **kwargs):
-        value = self.critic(critic_observations)
+    def evaluate(self, observations,privileged_obs, **kwargs):
+        value = self.critic(torch.cat((observations,privileged_obs),dim=-1))
         return value
 
 def get_activation(act_name):

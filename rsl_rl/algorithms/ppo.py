@@ -31,7 +31,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
+import torch.nn.functional as F
 from rsl_rl.modules import ActorCritic
 from rsl_rl.storage import RolloutStorage
 
@@ -92,7 +92,7 @@ class PPO:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
         # Compute the actions and values
         self.transition.actions = self.actor_critic.act(obs).detach()
-        self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
+        self.transition.values = self.actor_critic.evaluate(obs,critic_obs).detach()
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.actor_critic.action_mean.detach()
         self.transition.action_sigma = self.actor_critic.action_std.detach()
@@ -113,11 +113,13 @@ class PPO:
         self.transition.clear()
         self.actor_critic.reset(dones)
     
-    def compute_returns(self, last_critic_obs):
-        last_values= self.actor_critic.evaluate(last_critic_obs).detach()
+    def compute_returns(self, obs,last_critic_obs):
+        last_values= self.actor_critic.evaluate(obs,last_critic_obs).detach()
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 
     def update(self):
+        self.adaptation_module_optimizer = optim.Adam(self.actor_critic.parameters(),
+                                                      lr=1.e-3)
         mean_value_loss = 0
         mean_surrogate_loss = 0
         if self.actor_critic.is_recurrent:
@@ -130,7 +132,7 @@ class PPO:
 
                 self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
                 actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
-                value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
+                value_batch = self.actor_critic.evaluate(obs_batch,critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
                 mu_batch = self.actor_critic.action_mean
                 sigma_batch = self.actor_critic.action_std
                 entropy_batch = self.actor_critic.entropy
@@ -178,6 +180,18 @@ class PPO:
 
                 mean_value_loss += value_loss.item()
                 mean_surrogate_loss += surrogate_loss.item()
+
+
+                adaptation_pred = self.actor_critic.state_estimator(obs_batch)
+                with torch.no_grad():
+                    adaptation_target = critic_obs_batch
+                selection_indices = torch.linspace(0, adaptation_pred.shape[1] - 1, steps=adaptation_pred.shape[1],
+                                                   dtype=torch.long)
+                adaptation_loss = F.mse_loss(adaptation_pred[:, selection_indices],
+                                             adaptation_target[:, selection_indices])
+                self.adaptation_module_optimizer.zero_grad()
+                adaptation_loss.backward()
+                self.adaptation_module_optimizer.step()
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
